@@ -261,10 +261,35 @@ app.post("/toggleMute", (req, res) => {
     }
 });
 
+const capitalize = (s) => {
+    if (typeof s !== 'string') return '';
+    const lowerCased = s.toLowerCase();
+    return lowerCased.charAt(0).toUpperCase() + lowerCased.slice(1);
+}
+
+const customAppnameMappings = (window) => {
+    const appNameFromPathFlat = window.appNameWithoutExe ? window.appNameWithoutExe.toLowerCase() : "";
+    const appNameCapitalized = capitalize(appNameFromPathFlat);
+
+    switch (appNameFromPathFlat) {
+        case 'code': // VSCode
+            const repoNameInTitle = window.title.split(" - ")[1];
+            const isAnLXRepo = repoNameInTitle.includes("lx-");
+            const repoName = isAnLXRepo ? capitalize(repoNameInTitle.replace("lx-", "")) : capitalize(repoNameInTitle);
+            //if lx, remove lx- and return rest, else return code
+            return repoName;
+        case 'electron':
+            return window.title
+        default: return appNameCapitalized;
+    }
+};
+
+
 app.get("/windows", (req, res) => {
     console.log("got windows call")
     try {
-        const blacklistedWindows = ["EdgeGameAssist", "XboxGameBarSpotify", "ShellExperienceHost", "SearchHost", "StartMenuExperienceHost", "TextInputHost"];
+        const prioritizedApps = ["zen", "code", "slack", "spotify"];
+        const blacklistedWindows = ["EdgeGameAssist", "XboxGameBarSpotify", "ShellExperienceHost", "SearchHost", "StartMenuExperienceHost", "TextInputHost", "ApplicationFrameHost", "SystemSettings"];
         const blacklistedWindowPaths = ["C:\\Windows\\SystemApps"];
 
         const activeWindow = windowManager.getActiveWindow();
@@ -275,15 +300,15 @@ app.get("/windows", (req, res) => {
             processId: win.processId,
             isVisible: win.isVisible(),
             isWindow: win.isWindow(),
-            /* icon: win.getIcon(), */
             bounds: win.getBounds(),
             processPath: win.path,
             appName: win.path ? path.basename(win.path) : null,
+            appNameWithoutExe: win.path ? path.basename(win.path).split(".")[0] : null,
             window: win.getMonitor(),
             active: activeWindow && win.id === activeWindow.id
         })).filter(win => win.isVisible && win.title.trim() !== "");
 
-        const filteredWindows = windows.filter(win => {
+        let filteredWindows = windows.filter(win => {
             const appNameWithoutExe = win.appName ? win.appName.split(".")[0] : "";
             if (blacklistedWindows.includes(appNameWithoutExe)) {
                 return false;
@@ -299,17 +324,27 @@ app.get("/windows", (req, res) => {
             return true;
         });
 
-        const primaryMonitor = windowManager.getPrimaryMonitor();
+        filteredWindows = filteredWindows.map(win => ({
+            ...win,
+            customName: customAppnameMappings(win)
+        })).sort((a, b) => {
+            // sort so all of same app are together, then by title
+            if (a.appNameWithoutExe < b.appNameWithoutExe) return -1;
+            if (a.appNameWithoutExe > b.appNameWithoutExe) return 1;
+            if (a.customName < b.customName) return -1;
+            if (a.customName > b.customName) return 1;
+            return 0;
+        }).sort((a, b) => {
+            // sort so prioritized apps come first
+            const aPriority = prioritizedApps.indexOf(a.appNameWithoutExe ? a.appNameWithoutExe.toLowerCase() : "");
+            const bPriority = prioritizedApps.indexOf(b.appNameWithoutExe ? b.appNameWithoutExe.toLowerCase() : "");
+            if (aPriority === -1 && bPriority === -1) return 0;
+            if (aPriority === -1) return 1;
+            if (bPriority === -1) return -1;
+            return aPriority - bPriority;
+        });
 
-        const monitors = windowManager.getMonitors().map((m, index) => ({
-            id: index,
-            bounds: m.bounds,
-            isPrimary: m.id === primaryMonitor.id
-        }));
-
-        console.log(`Found ${filteredWindows.length} windows after filtering`);
-
-        res.send({ windows: filteredWindows, monitors });
+        res.send(filteredWindows);
     } catch (e) {
         console.error("caught exception", e);
         res.status(500).send(`Server error: ${e}`);
@@ -335,7 +370,7 @@ app.get("/windowIcon", (req, res) => {
             return res.status(404).send("Window not found for id " + windowId);
         }
 
-        const icon = win.getIcon();
+        const icon = win.getIcon(32);
         if (!icon) {
             console.log("No icon found from getIcon(), trying to extract from path");
             const iconPath = win.path;
@@ -372,8 +407,8 @@ app.post("/focusWindow", (req, res) => {
             return res.status(404).send("Window not found for id " + windowId);
         }
 
-        win.bringToTop();
         win.show();
+        win.bringToTop();
         res.send(`Window ${windowId} focused`);
     } catch (e) {
         console.error("caught exception", e);
