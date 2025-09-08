@@ -4,6 +4,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
+const iconExtractor = require('icon-extractor');
 const SoundMixer = require("native-sound-mixer").default;
 const mixer = require("native-sound-mixer");
 const { DeviceType } = mixer;
@@ -37,7 +38,7 @@ app.post("/macro", (req, res) => {
 app.post("/runFile", (req, res) => {
     console.log("got runFile call")
     try {
-        const { file, directory } = req.body;
+        const { file, directory, args } = req.body;
 
         if (!file) return res.status(400).send("Missing file name");
 
@@ -49,7 +50,13 @@ app.post("/runFile", (req, res) => {
             return res.status(404).send(`File not found: ${scriptPath}`);
         }
 
-        const ahk = spawn(AHK_PATH, [scriptPath]);
+        // Ensure args is an array, default to toggle if nothing is passed
+        const ahkArgs = Array.isArray(args) ? args : ["toggle"];
+
+        const ahk = spawn(
+            AHK_PATH,
+            [scriptPath, ...ahkArgs],
+        );
 
         ahk.on("exit", code => res.send(`File finished with code ${code}`));
         ahk.stderr.on("data", data => console.error(`AHK Error: ${data}`));
@@ -59,52 +66,197 @@ app.post("/runFile", (req, res) => {
     }
 });
 
-app.get("/audioSessions", (req, res) => {
-    console.log("got audioSessions call")
+const blacklistedSessions = ["parsecd", "steam"];
+
+app.get("/audio", (req, res) => {
+    console.log("got audio call")
     /* https://www.npmjs.com/package/native-sound-mixer */
 
     try {
-        const devices = SoundMixer.devices;
-        console.log(devices);
-
         const device = SoundMixer.getDefaultDevice(DeviceType.RENDER);
-        console.log(device);
 
-        const sessions = device.sessions;
-        const session = sessions[0]; // get the first session for testing
-        console.log(sessions);
-        console.log(session);
+        const sessions = device.sessions.filter((s) => s.name && !blacklistedSessions.includes(s.name.toLowerCase()));
 
-        // retrieving the mute flag 
-        const isDeviceMuted = device.mute; // bool
-        console.log(isDeviceMuted);
+        const mainAudioInPercent = String(Math.round(device.volume * 100)) + "%";
+        const mainAudio = {
+            volume: mainAudioInPercent,
+            muted: device.mute
+        }
 
-        /* // toggling mute
-        device.mute = !isDeviceMuted; */
+        let sessionAudios = sessions.map((s) => {
+            const splitted = s.appName ? s.appName.split("\\") : [];
+            const exeName = splitted.length ? splitted[splitted.length - 1] : "Unknown";
 
-        // retrieving the volume 
-        const deviceVolume = device.volume;
-        console.log(deviceVolume);
+            const volumeInPercent = String(Math.round(s.volume * 100)) + "%";
 
-        /* // adding 10% to volume
-        device.volume += .1; */
+            return {
+                name: s.name,
+                appName: s.appName,
+                exeName: exeName,
+                exeNameWithoutExe: exeName.split(".")[0],
+                volume: volumeInPercent,
+                muted: s.mute
+            }
+        });
 
-        // set session to a valid session object
-        const isSessionMuted = session.mute;
-        console.log(isSessionMuted);
-        // toggling mute 
-        /* session.mute = !isSessionMuted; */
+        sessionAudios = sessionAudios.filter(s => s.name && !blacklistedSessions.includes(s.exeNameWithoutExe.toLowerCase()));
 
-        // set session to a valid session object
-        const sessionVolume = session.volume;
-        console.log(sessionVolume);
-        // adding 10% to volume
-        /* session.volume += .1; */
+        //deduplicate by name, keeping the last
+        const seen = new Set();
+        sessionAudios = sessionAudios.filter(s => {
+            if (seen.has(s.name)) {
+                return false;
+            }
+            seen.add(s.name);
+            return true;
+        });
 
-        res.json({ devices, device, sessions, isDeviceMuted, deviceVolume, isSessionMuted, sessionVolume });
+        res.json({ sessionAudios, mainAudio });
     } catch (e) {
         console.error("caught exception", e);
-        res.status(500).send("Server error");
+        res.status(500).send(`Server error: ${e}`);
+    }
+});
+
+const getIcon = (exePath) => {
+    return new Promise((resolve, reject) => {
+        const listener = (icon) => {
+            if (icon.Path === exePath) {
+                console.log('Got correct icon for: ' + exePath);
+                iconExtractor.emitter.removeListener('icon', listener);
+                resolve(icon.Base64ImageData);
+            }
+        };
+
+        iconExtractor.emitter.on('icon', listener);
+        iconExtractor.getIcon(exePath, exePath);
+    });
+};
+
+app.get("/sessionIcon", (req, res) => {
+    console.log("got sessionIcon call")
+    try {
+        const { sessionName } = req.query;
+
+        if (!sessionName) {
+            return res.status(400).send("Missing sessionName parameter");
+        }
+
+        const device = SoundMixer.getDefaultDevice(DeviceType.RENDER);
+        const session = device.sessions.find((s) => s.name === sessionName);
+
+        if (!session) {
+            return res.status(404).send(`Session not found: ${sessionName}`);
+        }
+
+        const iconPath = session.appName;
+        console.log("Icon path:", iconPath);
+        if (!iconPath || !fs.existsSync(iconPath)) {
+            console.error("Icon path does not exist:", iconPath);
+            return res.status(404).send("Icon not found");
+        }
+
+
+        /*  iconExtractor.emitter.on('icon', function(icon) {
+             console.log('Here is my context: ' + icon.Context);
+             console.log('Here is the path it was for: ' + icon.Path);
+             console.log('Here is the base64 image: ' + icon.Base64ImageData);
+ 
+             const iconAsBase64 = icon.Base64ImageData;
+             const buffer = Buffer.from(iconAsBase64, 'base64');
+             res.set('Content-Type', 'image/png');
+             return res.send(buffer);
+         });
+ 
+         iconExtractor.getIcon(session.appName, iconPath); */
+
+        getIcon(iconPath).then((iconAsBase64) => {
+            const buffer = Buffer.from(iconAsBase64, 'base64');
+            res.set('Content-Type', 'image/png');
+            return res.send(buffer);
+        }).catch((err) => {
+            console.error("Error extracting icon:", err);
+            return res.status(500).send("Error extracting icon");
+        });
+    } catch (e) {
+        console.error("caught exception", e);
+        return res.status(500).send(`Server error: ${e}`);
+    }
+});
+
+app.post("/changeVolume", (req, res) => {
+    console.log("got volume call")
+
+    try {
+        const { volume, sessionName, operation } = req.query;
+
+        if (volume == null || volume < 0 || volume > 1) {
+            return res.status(400).send("Invalid volume value. Must be between 0 and 1.");
+        }
+
+        const device = SoundMixer.getDefaultDevice(DeviceType.RENDER);
+
+        if (sessionName) {
+            const session = device.sessions.find((s) => s.name === sessionName);
+            if (!session) {
+                return res.status(404).send(`Session not found: ${sessionName}`);
+            }
+            if (operation === "increase") {
+                console.log("increasing volume by", volume);
+                session.volume += Number(volume);
+            } else if (operation === "decrease") {
+                console.log("decreasing volume by", volume);
+                session.volume -= Number(volume);
+            } else {
+                console.log(`Set volume of session ${session.name} to ${volume}`);
+                session.volume = Number(volume);
+            }
+        } else {
+            // do device volume
+            if (operation === "increase") {
+                console.log("increasing device volume by", volume);
+                device.volume += Number(volume);
+            } else if (operation === "decrease") {
+                console.log("decreasing device volume by", volume);
+                device.volume -= Number(volume);
+            } else {
+                console.log(`Set device volume to ${volume}`);
+                device.volume = Number(volume);
+            }
+        }
+
+        res.send(`Volume set to ${volume}`);
+    } catch (e) {
+        console.error("caught exception", e);
+        res.status(500).send(`Server error: ${e}`);
+    }
+});
+
+app.post("/toggleMute", (req, res) => {
+    console.log("got toggleMute call")
+
+    try {
+        const { sessionName } = req.query;
+
+        const device = SoundMixer.getDefaultDevice(DeviceType.RENDER);
+
+        if (sessionName) {
+            const session = device.sessions.find((s) => s.name === sessionName);
+            if (!session) {
+                console.error("Session not found:", sessionName);
+                return res.status(404).send(`Session not found: ${sessionName}`);
+            }
+            session.mute = !session.mute;
+            console.log(`Toggled mute of session ${session.name} to ${session.mute}`);
+        } else {
+            device.mute = !device.mute;
+            console.log(`Toggled device mute to ${device.mute}`);
+        }
+
+        res.send(`Mute toggled`);
+    } catch (e) {
+        console.error("caught exception", e);
+        res.status(500).send(`Server error: ${e}`);
     }
 });
 
