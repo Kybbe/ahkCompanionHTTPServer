@@ -5,6 +5,7 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 const iconExtractor = require('icon-extractor');
+const { windowManager } = require("node-window-manager");
 const SoundMixer = require("native-sound-mixer").default;
 const mixer = require("native-sound-mixer");
 const { DeviceType } = mixer;
@@ -254,6 +255,126 @@ app.post("/toggleMute", (req, res) => {
         }
 
         res.send(`Mute toggled`);
+    } catch (e) {
+        console.error("caught exception", e);
+        res.status(500).send(`Server error: ${e}`);
+    }
+});
+
+app.get("/windows", (req, res) => {
+    console.log("got windows call")
+    try {
+        const blacklistedWindows = ["EdgeGameAssist", "XboxGameBarSpotify", "ShellExperienceHost", "SearchHost", "StartMenuExperienceHost", "TextInputHost"];
+        const blacklistedWindowPaths = ["C:\\Windows\\SystemApps"];
+
+        const activeWindow = windowManager.getActiveWindow();
+
+        const windows = windowManager.getWindows().map(win => ({
+            id: win.id,
+            title: win.getTitle(),
+            processId: win.processId,
+            isVisible: win.isVisible(),
+            isWindow: win.isWindow(),
+            /* icon: win.getIcon(), */
+            bounds: win.getBounds(),
+            processPath: win.path,
+            appName: win.path ? path.basename(win.path) : null,
+            window: win.getMonitor(),
+            active: activeWindow && win.id === activeWindow.id
+        })).filter(win => win.isVisible && win.title.trim() !== "");
+
+        const filteredWindows = windows.filter(win => {
+            const appNameWithoutExe = win.appName ? win.appName.split(".")[0] : "";
+            if (blacklistedWindows.includes(appNameWithoutExe)) {
+                return false;
+            }
+
+            if (win.processPath) {
+                for (const blacklistedPath of blacklistedWindowPaths) {
+                    if (win.processPath.startsWith(blacklistedPath)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+
+        const primaryMonitor = windowManager.getPrimaryMonitor();
+
+        const monitors = windowManager.getMonitors().map((m, index) => ({
+            id: index,
+            bounds: m.bounds,
+            isPrimary: m.id === primaryMonitor.id
+        }));
+
+        console.log(`Found ${filteredWindows.length} windows after filtering`);
+
+        res.send({ windows: filteredWindows, monitors });
+    } catch (e) {
+        console.error("caught exception", e);
+        res.status(500).send(`Server error: ${e}`);
+    }
+});
+
+const getWindowById = (windowId) => {
+    const win = windowManager.getWindows().find(w => String(w.id).toLocaleLowerCase() === String(windowId).toLocaleLowerCase());
+    return win;
+}
+
+app.get("/windowIcon", (req, res) => {
+    console.log("got windowIcon call")
+
+    try {
+        const { windowId } = req.query;
+        if (!windowId) {
+            return res.status(400).send("Missing windowId");
+        }
+
+        const win = getWindowById(windowId);
+        if (!win) {
+            return res.status(404).send("Window not found for id " + windowId);
+        }
+
+        const icon = win.getIcon();
+        if (!icon) {
+            console.log("No icon found from getIcon(), trying to extract from path");
+            const iconPath = win.path;
+            getIcon(iconPath).then((iconAsBase64) => {
+                const buffer = Buffer.from(iconAsBase64, 'base64');
+                console.log("Extracted icon from path:", iconPath);
+                res.set('Content-Type', 'image/png');
+                return res.send(buffer);
+            }).catch((err) => {
+                console.error("Error extracting icon:", err);
+                return res.status(500).send("Error extracting icon");
+            });
+        } else {
+            res.set('Content-Type', 'image/png');
+            return res.send(icon);
+        }
+    } catch (e) {
+        console.error("caught exception", e);
+        res.status(500).send(`Server error: ${e}`);
+    }
+});
+
+app.post("/focusWindow", (req, res) => {
+    console.log("got focusWindow call")
+
+    try {
+        const { windowId } = req.query;
+        if (!windowId) {
+            return res.status(400).send("Missing windowId");
+        }
+
+        const win = getWindowById(windowId);
+        if (!win) {
+            return res.status(404).send("Window not found for id " + windowId);
+        }
+
+        win.bringToTop();
+        win.show();
+        res.send(`Window ${windowId} focused`);
     } catch (e) {
         console.error("caught exception", e);
         res.status(500).send(`Server error: ${e}`);
