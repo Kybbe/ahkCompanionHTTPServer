@@ -1,0 +1,26 @@
+{
+	"name": "companion-module-kybbe",
+	"version": "0.1.0",
+	"main": "index.js",
+	"scripts": {
+		"format": "prettier -w .",
+		"package": "companion-module-build"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bitfocus/companion-module-kybbe.git"
+	},
+	"dependencies": {
+		"@companion-module/base": "~1.11.3",
+		"@julusian/image-rs": "^2.0.1",
+		"got": "^14.4.7",
+		"hpagent": "^1.2.0"
+	},
+	"devDependencies": {
+		"@companion-module/tools": "^2.3.0",
+		"prettier": "^3.5.3"
+	},
+	"prettier": "@companion-module/tools/.prettierrc.json",
+	"packageManager": "yarn@4.9.1"
+}

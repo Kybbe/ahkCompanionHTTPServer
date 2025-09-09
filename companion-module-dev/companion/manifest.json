@@ -1,0 +1,36 @@
+{
+	"id": "companion-module-kybbe",
+	"name": "kybbe-companion",
+	"shortname": "kybbe",
+	"description": "kybbe-companion",
+	"version": "0.0.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/bitfocus/companion-module-kybbe.git",
+	"bugs": "https://github.com/bitfocus/companion-module-kybbe/issues",
+	"maintainers": [
+		{
+			"name": "kybbe",
+			"email": "kybbe@gmail.com"
+		}
+	],
+	"legacyIds": [],
+	"runtime": {
+		"type": "node22",
+		"api": "nodejs-ipc",
+		"apiVersion": "0.0.0",
+		"entrypoint": "../index.js"
+	},
+	"products": [
+		"kybbes custom companion modules"
+	],
+	"manufacturer": "kybbe",
+	"keywords": [
+		"kybbe",
+		"custom",
+		"module",
+		"ahk",
+		"ohm",
+		"window-management",
+		"audio-management"
+	]
+}
